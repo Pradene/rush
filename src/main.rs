@@ -6,12 +6,14 @@ use rush::prompt::*;
 fn main() {
     prompt_print();
 
-    let command = input_read();
-    println!("command: {}", command);
+    let input = input_read();
+    println!("input: {}", input);
 
-    let lexer = Lexer::new(command);
+    let lexer = Lexer::new(input);
     let mut parser = Parser::new(lexer);
-    let command = parser.parse();
+    let command = parser.parse().unwrap();
 
     println!("{:#?}", command);
+
+    let _ = command.execute();
 }
