@@ -10,7 +10,7 @@ pub enum Token {
     And,                        // &&
     Or,                         // ||
     Background,                 // &
-    RedirectType(RedirectType), // >, >>, >&, <, <<, <& 
+    RedirectType(RedirectType), // >, >>, >&, <, <<, <&
     LParen,                     // (
     RParen,                     // )
     EOF,                        // End of input
@@ -31,13 +31,13 @@ impl Lexer {
 
     pub fn tokens(&mut self) -> Vec<Token> {
         let mut tokens = Vec::new();
-        
+
         loop {
             let token = self.next_token();
             if token == Token::EOF {
                 break;
             }
-            
+
             tokens.push(token);
         }
 
@@ -116,9 +116,7 @@ impl Lexer {
                 self.consume();
                 Token::RedirectType(RedirectType::DuplicateIn)
             }
-            _ => {
-                Token::RedirectType(RedirectType::Input)
-            }
+            _ => Token::RedirectType(RedirectType::Input),
         }
     }
 
@@ -133,9 +131,7 @@ impl Lexer {
                 self.consume();
                 Token::RedirectType(RedirectType::DuplicateOut)
             }
-            _ => {
-                Token::RedirectType(RedirectType::Overwrite)
-            }
+            _ => Token::RedirectType(RedirectType::Overwrite),
         }
     }
 

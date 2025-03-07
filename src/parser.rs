@@ -1,11 +1,5 @@
+use crate::command::{Command, Operator, RedirectTarget, RedirectType, Redirection};
 use crate::lexer::{Lexer, Token};
-use crate::command::{
-    Command,
-    Operator,
-    RedirectTarget,
-    RedirectType,
-    Redirection
-};
 
 pub struct Parser {
     lexer: Lexer,

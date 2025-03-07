@@ -1,6 +1,6 @@
-use std::process::{Command as StdCommand, Stdio};
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::FromRawFd;
+use std::process::{Command as StdCommand, Stdio};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
@@ -26,12 +26,12 @@ pub enum RedirectTarget {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RedirectType {
-    Overwrite,      // `>`
-    Append,         // `>>`
-    Input,          // `<`
-    HereDoc,        // `<<`
-    DuplicateIn,    // `<&`
-    DuplicateOut,   // `>&`
+    Overwrite,    // `>`
+    Append,       // `>>`
+    Input,        // `<`
+    HereDoc,      // `<<`
+    DuplicateIn,  // `<&`
+    DuplicateOut, // `>&`
 }
 
 #[derive(Debug, Clone)]
@@ -50,14 +50,16 @@ pub enum Command {
 }
 
 impl Command {
-    // Helper to convert any command to std::process::Command with redirections
     fn build_std_command(&self) -> Result<StdCommand, String> {
         match self {
-            Command::Simple { executable, args, redirects } => {
+            Command::Simple {
+                executable,
+                args,
+                redirects,
+            } => {
                 let mut cmd = StdCommand::new(executable);
                 cmd.args(args);
 
-                // Apply redirections
                 for redir in redirects {
                     let fd = redir.fd.unwrap_or(match redir.direction {
                         RedirectType::Input | RedirectType::DuplicateIn => 0,
@@ -67,17 +69,23 @@ impl Command {
                     match &redir.target {
                         RedirectTarget::File(path) => {
                             let file = match redir.direction {
-                                RedirectType::Overwrite => 
-                                    File::create(path).map_err(|e| e.to_string())?,
-                                RedirectType::Append =>
-                                    OpenOptions::new()
-                                        .append(true)
-                                        .create(true)
-                                        .open(path)
-                                        .map_err(|e| e.to_string())?,
-                                RedirectType::Input => 
-                                    File::open(path).map_err(|e| e.to_string())?,
-                                _ => return Err(format!("Unsupported redirection: {:?}", redir.direction)),
+                                RedirectType::Overwrite => {
+                                    File::create(path).map_err(|e| e.to_string())?
+                                }
+                                RedirectType::Append => OpenOptions::new()
+                                    .append(true)
+                                    .create(true)
+                                    .open(path)
+                                    .map_err(|e| e.to_string())?,
+                                RedirectType::Input => {
+                                    File::open(path).map_err(|e| e.to_string())?
+                                }
+                                _ => {
+                                    return Err(format!(
+                                        "Unsupported redirection: {:?}",
+                                        redir.direction
+                                    ))
+                                }
                             };
 
                             match fd {
@@ -111,54 +119,60 @@ impl Command {
                 let status = cmd.status().map_err(|e| e.to_string())?;
                 Ok(status.success())
             }
-            
-            Command::Binary { left, right, operator } => {
-                match operator {
-                    Operator::Pipe => {
-                        let mut left_cmd = left.build_std_command()?
-                            .stdout(Stdio::piped())
-                            .spawn()
-                            .map_err(|e| e.to_string())?;
 
-                        let left_output = left_cmd.stdout.take()
-                            .ok_or("Failed to capture left command output")?;
+            Command::Binary {
+                left,
+                right,
+                operator,
+            } => match operator {
+                Operator::Pipe => {
+                    let mut left_cmd = left
+                        .build_std_command()?
+                        .stdout(Stdio::piped())
+                        .spawn()
+                        .map_err(|e| e.to_string())?;
 
-                        let mut right_cmd = right.build_std_command()?
-                            .stdin(Stdio::from(left_output))
-                            .spawn()
-                            .map_err(|e| e.to_string())?;
+                    let left_output = left_cmd
+                        .stdout
+                        .take()
+                        .ok_or("Failed to capture left command output")?;
 
-                        let left_status = left_cmd.wait().map_err(|e| e.to_string())?;
-                        let right_status = right_cmd.wait().map_err(|e| e.to_string())?;
+                    let mut right_cmd = right
+                        .build_std_command()?
+                        .stdin(Stdio::from(left_output))
+                        .spawn()
+                        .map_err(|e| e.to_string())?;
 
-                        Ok(left_status.success() && right_status.success())
-                    }
-                    Operator::And => {
-                        if left.execute()? {
-                            right.execute()
-                        } else {
-                            Ok(false)
-                        }
-                    }
-                    Operator::Or => {
-                        if left.execute()? {
-                            Ok(true)
-                        } else {
-                            right.execute()
-                        }
-                    }
-                    Operator::Semicolon => {
-                        let _ = left.execute()?;
+                    let left_status = left_cmd.wait().map_err(|e| e.to_string())?;
+                    let right_status = right_cmd.wait().map_err(|e| e.to_string())?;
+
+                    Ok(left_status.success() && right_status.success())
+                }
+                Operator::And => {
+                    if left.execute()? {
                         right.execute()
+                    } else {
+                        Ok(false)
                     }
-                    Operator::Background => {
-                        left.build_std_command()?
-                            .spawn()
-                            .map_err(|e| e.to_string())?;
+                }
+                Operator::Or => {
+                    if left.execute()? {
+                        Ok(true)
+                    } else {
                         right.execute()
                     }
                 }
-            }
+                Operator::Semicolon => {
+                    let _ = left.execute()?;
+                    right.execute()
+                }
+                Operator::Background => {
+                    left.build_std_command()?
+                        .spawn()
+                        .map_err(|e| e.to_string())?;
+                    right.execute()
+                }
+            },
         }
     }
 }

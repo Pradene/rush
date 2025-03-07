@@ -4,16 +4,22 @@ use rush::parser::Parser;
 use rush::prompt::*;
 
 fn main() {
-    prompt_print();
+    loop {
+        prompt_print();
+        let input = input_read();
 
-    let input = input_read();
-    println!("input: {}", input);
+        let lexer = Lexer::new(input);
+        let command = Parser::new(lexer).parse();
 
-    let lexer = Lexer::new(input);
-    let mut parser = Parser::new(lexer);
-    let command = parser.parse().unwrap();
+        // println!("input: {}", input);
+        // println!("{:#?}", command);
 
-    println!("{:#?}", command);
-
-    let _ = command.execute();
+        match command {
+            Ok(command) => match command.execute() {
+                Ok(_) => continue,
+                Err(e) => eprintln!("{}", e),
+            },
+            Err(e) => eprintln!("Parsing error: {}", e),
+        }
+    }
 }
