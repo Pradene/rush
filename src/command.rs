@@ -39,8 +39,10 @@ pub enum RedirectTarget {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RedirectType {
-    Overwrite, // `>`
-    Append,    // `>>`
-    Input,     // `<`
-    HereDoc,   // `<<`
+    Overwrite,      // `>`
+    Append,         // `>>`
+    Input,          // `<`
+    HereDoc,        // `<<`
+    DuplicateIn,    // `<&`
+    DuplicateOut,   // `<&`
 }

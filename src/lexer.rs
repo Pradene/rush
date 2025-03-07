@@ -11,7 +11,7 @@ pub enum Token {
     And,                        // &&
     Or,                         // ||
     Background,                 // &
-    RedirectType(RedirectType), // >, >>, <, etc.
+    RedirectType(RedirectType), // >, >>, <, <<.
     LParen,                     // (
     RParen,                     // )
     EOF,                        // End of input
@@ -98,21 +98,35 @@ impl Lexer {
 
     fn handle_redirect_in(&mut self) -> Token {
         self.consume();
-        if self.peek() == Some(&'<') {
-            self.consume();
-            Token::RedirectType(RedirectType::HereDoc)
-        } else {
-            Token::RedirectType(RedirectType::Input)
+        match self.peek() {
+            Some('<') => {
+                self.consume();
+                Token::RedirectType(RedirectType::HereDoc)
+            }
+            Some('&') => {
+                self.consume();
+                Token::RedirectType(RedirectType::DuplicateIn)
+            }
+            _ => {
+                Token::RedirectType(RedirectType::Input)
+            }
         }
     }
 
     fn handle_redirect_out(&mut self) -> Token {
         self.consume();
-        if self.peek() == Some(&'>') {
-            self.consume();
-            Token::RedirectType(RedirectType::Append)
-        } else {
-            Token::RedirectType(RedirectType::Overwrite)
+        match self.peek() {
+            Some('<') => {
+                self.consume();
+                Token::RedirectType(RedirectType::Append)
+            }
+            Some('&') => {
+                self.consume();
+                Token::RedirectType(RedirectType::DuplicateOut)
+            }
+            _ => {
+                Token::RedirectType(RedirectType::Overwrite)
+            }
         }
     }
 
@@ -138,14 +152,13 @@ impl Lexer {
 
     fn read_quoted(&mut self, quote: char) -> String {
         let mut content = String::new();
-        self.consume(); // Skip opening quote
+        self.consume();
         while self.position < self.input.len() {
             let c = self.input[self.position];
             if c == quote {
-                self.consume(); // Skip closing quote
+                self.consume();
                 break;
             } else if c == '\\' && quote == '"' {
-                // Handle escapes in double quotes (e.g., \", \$)
                 self.consume();
                 if self.position < self.input.len() {
                     content.push(self.input[self.position]);
