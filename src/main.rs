@@ -1,5 +1,6 @@
 use rush::input::*;
-use rush::lexer::{Lexer, Token};
+use rush::lexer::Lexer;
+use rush::parser::Parser;
 use rush::prompt::*;
 
 fn main() {
@@ -8,13 +9,9 @@ fn main() {
     let command = input_read();
     println!("command: {}", command);
 
-    let mut lexer = Lexer::new(command);
+    let lexer = Lexer::new(command);
+    let mut parser = Parser::new(lexer);
+    let command = parser.parse();
 
-    loop {
-        let token = lexer.next_token();
-        println!("{:?}", token);
-        if token == Token::EOF {
-            break;
-        }
-    }
+    println!("{:?}", command);
 }

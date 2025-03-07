@@ -6,12 +6,11 @@ pub enum Token {
     SingleQuoted(String),       // 'text'
     DoubleQuoted(String),       // "text"
     Semicolon,                  // ;
-    DoubleSemicolon,            // ;;
     Pipe,                       // |
     And,                        // &&
     Or,                         // ||
     Background,                 // &
-    RedirectType(RedirectType), // >, >>, <, <<.
+    RedirectType(RedirectType), // >, >>, >&, <, <<, <& 
     LParen,                     // (
     RParen,                     // )
     EOF,                        // End of input
@@ -28,6 +27,21 @@ impl Lexer {
             input: input.chars().collect(),
             position: 0,
         }
+    }
+
+    pub fn tokens(&mut self) -> Vec<Token> {
+        let mut tokens = Vec::new();
+        
+        loop {
+            let token = self.next_token();
+            if token == Token::EOF {
+                break;
+            }
+            
+            tokens.push(token);
+        }
+
+        tokens
     }
 
     fn skip_whitespace(&mut self) {
@@ -68,12 +82,7 @@ impl Lexer {
 
     fn handle_semicolon(&mut self) -> Token {
         self.consume();
-        if self.peek() == Some(&';') {
-            self.consume();
-            Token::DoubleSemicolon
-        } else {
-            Token::Semicolon
-        }
+        Token::Semicolon
     }
 
     fn handle_pipe(&mut self) -> Token {
