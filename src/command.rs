@@ -6,23 +6,20 @@ pub enum Command {
         redirects: Vec<Redirection>,
     },
 
-    Pipeline {
+    Binary {
         left: Box<Command>,
         right: Box<Command>,
-    },
-
-    List {
-        commands: Vec<Command>,
-        separators: Vec<ListSeparator>,
+        operator: Operator,
     },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ListSeparator {
+pub enum Operator {
     Semicolon,  // `;`
     Background, // `&`
     And,        // `&&`
     Or,         // `||`
+    Pipe,       // `|`
 }
 
 #[derive(Debug, Clone)]
@@ -45,5 +42,5 @@ pub enum RedirectType {
     Input,          // `<`
     HereDoc,        // `<<`
     DuplicateIn,    // `<&`
-    DuplicateOut,   // `<&`
+    DuplicateOut,   // `>&`
 }

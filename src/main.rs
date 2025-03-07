@@ -13,5 +13,5 @@ fn main() {
     let mut parser = Parser::new(lexer);
     let command = parser.parse();
 
-    println!("{:?}", command);
+    println!("{:#?}", command);
 }

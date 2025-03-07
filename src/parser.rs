@@ -1,7 +1,7 @@
 use crate::lexer::{Lexer, Token};
 use crate::command::{
     Command,
-    ListSeparator,
+    Operator,
     RedirectTarget,
     RedirectType,
     Redirection
@@ -27,47 +27,32 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<Command, String> {
-        self.parse_list()
+        self.parse_with_min_precedence(0)
     }
 
-    fn parse_list(&mut self) -> Result<Command, String> {
-        let mut commands = vec![];
-        let mut separators = vec![];
-
-        commands.push(self.parse_pipeline()?);
-
-        while matches!(&self.current_token, 
-            Token::Semicolon | Token::And | Token::Or | Token::Background
-        ) {
-            let sep = match self.current_token {
-                Token::Semicolon => ListSeparator::Semicolon,
-                Token::And => ListSeparator::And,
-                Token::Or => ListSeparator::Or,
-                Token::Background => ListSeparator::Background,
-                _ => unreachable!(),
-            };
-            separators.push(sep);
-            self.advance();
-            
-            commands.push(self.parse_pipeline()?);
-        }
-
-        if commands.len() == 1 {
-            Ok(commands.remove(0))
-        } else {
-            Ok(Command::List { commands, separators })
-        }
-    }
-
-    fn parse_pipeline(&mut self) -> Result<Command, String> {
+    fn parse_with_min_precedence(&mut self, min_precedence: u8) -> Result<Command, String> {
         let mut left = self.parse_command()?;
 
-        while self.current_token == Token::Pipe {
-            self.advance(); // Consume '|'
-            let right = self.parse_command()?;
-            left = Command::Pipeline {
+        loop {
+            let (operator, precedence) = match self.current_token {
+                Token::Pipe => (Operator::Pipe, 4),
+                Token::And => (Operator::And, 3),
+                Token::Or => (Operator::Or, 2),
+                Token::Semicolon => (Operator::Semicolon, 1),
+                Token::Background => (Operator::Background, 1),
+                _ => break,
+            };
+
+            if precedence < min_precedence {
+                break;
+            }
+
+            self.advance();
+            let right = self.parse_with_min_precedence(precedence + 1)?;
+            left = Command::Binary {
                 left: Box::new(left),
                 right: Box::new(right),
+                operator,
             };
         }
 
@@ -78,7 +63,6 @@ impl Parser {
         let mut words = vec![];
         let mut redirects = vec![];
 
-        // Parse command words and redirections
         loop {
             match &self.current_token {
                 Token::Word(w) => {
@@ -114,7 +98,6 @@ impl Parser {
         };
         self.advance();
 
-        // Default file descriptors based on redirect type
         let (mut fd, direction) = match rt {
             RedirectType::Overwrite => (Some(1), RedirectType::Overwrite),
             RedirectType::Append => (Some(1), RedirectType::Append),
@@ -124,7 +107,6 @@ impl Parser {
             RedirectType::HereDoc => (Some(0), RedirectType::HereDoc),
         };
 
-        // Handle explicit file descriptors (e.g., 2>&1)
         if let Token::Word(n) = &self.current_token {
             if let Ok(num) = n.parse::<u32>() {
                 fd = Some(num);
