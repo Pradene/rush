@@ -138,56 +138,71 @@ impl Command {
                 operator,
             } => match operator {
                 Operator::Pipe => {
-                    let mut left_cmd = match left.build_std_command() {
-                        Ok(cmd) => cmd,
-                        Err(e) => {
-                            eprintln!("{}", e);
-                            return 127;
-                        }
-                    };
-
-                    let mut left_child = match left_cmd.stdout(Stdio::piped()).spawn() {
-                        Ok(child) => child,
-                        Err(e) => {
-                            eprintln!("Failed to execute left command: {}", e);
+                    let mut pipe_fds = [-1; 2];
+                    unsafe {
+                        if libc::pipe(pipe_fds.as_mut_ptr()) != 0 {
+                            eprintln!("Failed to create pipe");
                             return 1;
                         }
-                    };
+                    }
 
-                    let left_output = match left_child.stdout.take() {
-                        Some(output) => output,
-                        None => {
-                            eprintln!("Failed to capture left command output");
+                    let (read_fd, write_fd) = (pipe_fds[0], pipe_fds[1]);
+
+                    unsafe {
+                        let left_pid = libc::fork();
+
+                        if left_pid < 0 {
+                            eprintln!("Fork failed");
+                            libc::close(read_fd);
+                            libc::close(write_fd);
                             return 1;
-                        }
-                    };
+                        } else if left_pid == 0 {
+                            libc::close(read_fd);
 
-                    let mut right_cmd = match right.build_std_command() {
-                        Ok(cmd) => cmd,
-                        Err(e) => {
-                            eprintln!("{}", e);
-                            return 127;
-                        }
-                    };
+                            if libc::dup2(write_fd, 1) < 0 {
+                                eprintln!("dup2 failed for stdout");
+                                libc::exit(1);
+                            }
+                            libc::close(write_fd);
 
-                    let mut right_child = match right_cmd.stdin(Stdio::from(left_output)).spawn() {
-                        Ok(child) => child,
-                        Err(e) => {
-                            eprintln!("Failed to execute right command: {}", e);
+                            let exit_code = left.execute();
+                            libc::exit(exit_code);
+                        }
+
+                        libc::close(write_fd);
+
+                        let right_pid = libc::fork();
+
+                        if right_pid < 0 {
+                            eprintln!("Fork failed for right command");
+                            libc::close(read_fd);
+                            libc::waitpid(left_pid, std::ptr::null_mut(), 0);
                             return 1;
-                        }
-                    };
+                        } else if right_pid == 0 {
+                            if libc::dup2(read_fd, 0) < 0 {
+                                eprintln!("dup2 failed for stdin");
+                                libc::exit(1);
+                            }
+                            libc::close(read_fd);
 
-                    let _ = left_child.wait();
-                    let right_status = match right_child.wait() {
-                        Ok(status) => status,
-                        Err(e) => {
-                            eprintln!("Failed to get right command status: {}", e);
-                            return 1;
+                            let exit_code = right.execute();
+                            libc::exit(exit_code);
                         }
-                    };
 
-                    right_status.code().unwrap_or(1)
+                        libc::close(read_fd);
+
+                        let mut status = 0;
+                        let mut exit_code = 0;
+
+                        libc::waitpid(left_pid, &mut status, 0);
+
+                        libc::waitpid(right_pid, &mut status, 0);
+                        if libc::WIFEXITED(status) {
+                            exit_code = libc::WEXITSTATUS(status);
+                        }
+
+                        exit_code
+                    }
                 }
                 Operator::And => {
                     let left_code = left.execute();
@@ -209,23 +224,19 @@ impl Command {
                     let _ = left.execute();
                     right.execute()
                 }
-                Operator::Background => {
-                    let mut left_cmd = match left.build_std_command() {
-                        Ok(cmd) => cmd,
-                        Err(e) => {
-                            eprintln!("{}", e);
-                            return 127;
-                        }
-                    };
+                Operator::Background => unsafe {
+                    let pid = libc::fork();
 
-                    match left_cmd.spawn() {
-                        Ok(_) => right.execute(),
-                        Err(e) => {
-                            eprintln!("Failed to spawn background process: {}", e);
-                            return 1;
-                        }
+                    if pid < 0 {
+                        eprintln!("Fork failed for background process");
+                        1
+                    } else if pid == 0 {
+                        let exit_code = left.execute();
+                        libc::exit(exit_code);
+                    } else {
+                        right.execute()
                     }
-                }
+                },
             },
         }
     }

@@ -42,6 +42,7 @@ impl Parser {
             }
 
             self.advance();
+
             let right = self.parse_with_min_precedence(precedence + 1)?;
             left = Command::Binary {
                 left: Box::new(left),

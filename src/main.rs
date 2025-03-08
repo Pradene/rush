@@ -8,10 +8,11 @@ fn main() {
         prompt_print();
         let input = input_read();
 
+        // println!("input: {}", input);
+
         let lexer = Lexer::new(input);
         let command = Parser::new(lexer).parse();
 
-        // println!("input: {}", input);
         // println!("{:#?}", command);
 
         match command {
