@@ -1,8 +1,13 @@
 use std::ffi::CString;
 
+use libc::{
+    __errno_location, close, dup2, execvp, exit, fork, getpgrp, getpid, ioctl, open, pipe, setpgid,
+    signal, tcsetpgrp, waitpid,
+};
 use libc::{c_char, c_int};
-use libc::{close, dup2, execvp, exit, fork, open, pipe, waitpid};
-use libc::{O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY};
+use libc::{
+    EINTR, O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, SIGINT, SIGQUIT, SIG_DFL, TIOCSPGRP,
+};
 use libc::{WEXITSTATUS, WIFEXITED};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +112,13 @@ impl Command {
                 unsafe {
                     let pid = fork();
                     if pid == 0 {
+                        signal(SIGINT, SIG_DFL);
+                        signal(SIGQUIT, SIG_DFL);
+
+                        setpgid(0, 0);
+
+                        tcsetpgrp(0, getpid());
+
                         if let Err(e) = self.redirect() {
                             eprintln!("Redirection error: {}", e);
                             exit(1);
@@ -120,8 +132,21 @@ impl Command {
                         return 1;
                     }
 
+                    let shell_pgrp = getpgrp();
+
+                    setpgid(pid, pid);
+                    tcsetpgrp(0, pid);
+
                     let mut status = 0;
-                    waitpid(pid, &mut status, 0);
+                    while waitpid(pid, &mut status, 0) < 0 {
+                        if *__errno_location() != EINTR {
+                            break;
+                        }
+                    }
+
+                    let _ = tcsetpgrp(0, shell_pgrp);
+                    ioctl(0, TIOCSPGRP, &shell_pgrp);
+
                     if WIFEXITED(status) {
                         WEXITSTATUS(status) as i32
                     } else {
