@@ -1,16 +1,19 @@
 use rush::input::*;
 use rush::lexer::Lexer;
 use rush::parser::Parser;
-use rush::prompt::*;
 
 fn main() {
     loop {
-        prompt_print();
-        let input = input_read();
+        let prompt = String::from("> ");
+        let input = input_read(prompt);
+
+        if input.is_none() {
+            continue;
+        }
 
         // println!("input: {}", input);
 
-        let lexer = Lexer::new(input);
+        let lexer = Lexer::new(input.unwrap());
         let command = Parser::new(lexer).parse();
 
         // println!("{:#?}", command);

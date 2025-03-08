@@ -1,6 +1,9 @@
-use std::fs::{File, OpenOptions};
-use std::os::unix::io::FromRawFd;
-use std::process::{Command as StdCommand, Stdio};
+use std::ffi::CString;
+
+use libc::{c_char, c_int};
+use libc::{close, dup2, execvp, exit, fork, open, pipe, waitpid};
+use libc::{O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY};
+use libc::{WEXITSTATUS, WIFEXITED};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
@@ -14,7 +17,7 @@ pub enum Operator {
 #[derive(Debug, Clone)]
 pub struct Redirection {
     pub fd: Option<u32>,
-    pub direction: RedirectType,
+    pub operator: RedirectOperator,
     pub target: RedirectTarget,
 }
 
@@ -25,7 +28,7 @@ pub enum RedirectTarget {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RedirectType {
+pub enum RedirectOperator {
     Overwrite,    // `>`
     Append,       // `>>`
     Input,        // `<`
@@ -50,84 +53,79 @@ pub enum Command {
 }
 
 impl Command {
-    fn build_std_command(&self) -> Result<StdCommand, String> {
-        match self {
-            Command::Simple {
-                executable,
-                args,
-                redirects,
-            } => {
-                let mut cmd = StdCommand::new(executable);
-                cmd.args(args);
+    fn redirect(&self) -> Result<(), String> {
+        if let Command::Simple { redirects, .. } = self {
+            for redirection in redirects {
+                let fd = redirection.fd.unwrap_or(match redirection.operator {
+                    RedirectOperator::Input | RedirectOperator::DuplicateIn => 0,
+                    _ => 1,
+                });
 
-                for redir in redirects {
-                    let fd = redir.fd.unwrap_or(match redir.direction {
-                        RedirectType::Input | RedirectType::DuplicateIn => 0,
-                        _ => 1,
-                    });
+                match &redirection.target {
+                    RedirectTarget::File(path) => {
+                        let c_path = CString::new(path.as_str()).unwrap();
+                        let mode = match redirection.operator {
+                            RedirectOperator::Overwrite => O_WRONLY | O_CREAT | O_TRUNC,
+                            RedirectOperator::Append => O_WRONLY | O_CREAT | O_APPEND,
+                            RedirectOperator::Input => O_RDONLY,
+                            _ => return Err("Unsupported redirection type".into()),
+                        };
 
-                    match &redir.target {
-                        RedirectTarget::File(path) => {
-                            let file = match redir.direction {
-                                RedirectType::Overwrite => {
-                                    File::create(path).map_err(|e| e.to_string())?
-                                }
-                                RedirectType::Append => OpenOptions::new()
-                                    .append(true)
-                                    .create(true)
-                                    .open(path)
-                                    .map_err(|e| e.to_string())?,
-                                RedirectType::Input => {
-                                    File::open(path).map_err(|e| e.to_string())?
-                                }
-                                _ => {
-                                    return Err(format!(
-                                        "Unsupported redirection: {:?}",
-                                        redir.direction
-                                    ))
-                                }
-                            };
-
-                            match fd {
-                                0 => cmd.stdin(file),
-                                1 => cmd.stdout(file),
-                                2 => cmd.stderr(file),
-                                _ => return Err(format!("Unsupported file descriptor: {}", fd)),
-                            };
+                        let target_fd = unsafe { open(c_path.as_ptr(), mode, 0o644) };
+                        if target_fd < 0 {
+                            return Err("Failed to open file".into());
                         }
-                        RedirectTarget::FileDescriptor(target_fd) => {
-                            match fd {
-                                0 => cmd.stdin(unsafe { Stdio::from_raw_fd(*target_fd as i32) }),
-                                1 => cmd.stdout(unsafe { Stdio::from_raw_fd(*target_fd as i32) }),
-                                2 => cmd.stderr(unsafe { Stdio::from_raw_fd(*target_fd as i32) }),
-                                _ => return Err(format!("Unsupported FD: {}", fd)),
-                            };
-                        }
+
+                        unsafe { dup2(target_fd, fd as c_int) };
+                        unsafe { close(target_fd) };
+                    }
+                    RedirectTarget::FileDescriptor(target_fd) => {
+                        unsafe { dup2(*target_fd as c_int, fd as c_int) };
                     }
                 }
-
-                Ok(cmd)
             }
-            _ => Err("Complex commands need special handling".to_string()),
         }
+
+        Ok(())
     }
 
     pub fn execute(&self) -> i32 {
         match self {
-            Command::Simple { .. } => {
-                let mut cmd = match self.build_std_command() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                        return 127;
-                    }
-                };
+            Command::Simple {
+                executable, args, ..
+            } => {
+                let c_exec = CString::new(executable.as_str()).unwrap();
+                let mut c_args: Vec<CString> = args
+                    .iter()
+                    .map(|a| CString::new(a.as_str()).unwrap())
+                    .collect();
+                c_args.insert(0, c_exec.clone());
 
-                match cmd.status() {
-                    Ok(status) => status.code().unwrap_or(1),
-                    Err(e) => {
-                        eprintln!("Execution error: {}", e);
+                let mut ptr_args: Vec<*const c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
+                ptr_args.push(std::ptr::null());
+
+                unsafe {
+                    let pid = fork();
+                    if pid == 0 {
+                        if let Err(e) = self.redirect() {
+                            eprintln!("Redirection error: {}", e);
+                            exit(1);
+                        }
+
+                        execvp(c_exec.as_ptr(), ptr_args.as_ptr());
+                        eprintln!("Execution failed");
+                        exit(1);
+                    } else if pid < 0 {
+                        eprintln!("Fork failed");
                         return 1;
+                    }
+
+                    let mut status = 0;
+                    waitpid(pid, &mut status, 0);
+                    if WIFEXITED(status) {
+                        WEXITSTATUS(status) as i32
+                    } else {
+                        1
                     }
                 }
             }
@@ -138,70 +136,44 @@ impl Command {
                 operator,
             } => match operator {
                 Operator::Pipe => {
-                    let mut pipe_fds = [-1; 2];
+                    let mut fds = [0; 2];
                     unsafe {
-                        if libc::pipe(pipe_fds.as_mut_ptr()) != 0 {
-                            eprintln!("Failed to create pipe");
+                        if pipe(fds.as_mut_ptr()) != 0 {
+                            eprintln!("Pipe creation failed");
                             return 1;
                         }
                     }
 
-                    let (read_fd, write_fd) = (pipe_fds[0], pipe_fds[1]);
+                    let (read_end, write_end) = (fds[0], fds[1]);
+                    let left_pid = unsafe { fork() };
+                    if left_pid == 0 {
+                        unsafe {
+                            close(read_end);
+                            dup2(write_end, 1);
+                            close(write_end);
+                            exit(left.execute());
+                        }
+                    }
+
+                    let right_pid = unsafe { fork() };
+                    if right_pid == 0 {
+                        unsafe {
+                            close(write_end);
+                            dup2(read_end, 0);
+                            close(read_end);
+                            exit(right.execute());
+                        }
+                    }
 
                     unsafe {
-                        let left_pid = libc::fork();
-
-                        if left_pid < 0 {
-                            eprintln!("Fork failed");
-                            libc::close(read_fd);
-                            libc::close(write_fd);
-                            return 1;
-                        } else if left_pid == 0 {
-                            libc::close(read_fd);
-
-                            if libc::dup2(write_fd, 1) < 0 {
-                                eprintln!("dup2 failed for stdout");
-                                libc::exit(1);
-                            }
-                            libc::close(write_fd);
-
-                            let exit_code = left.execute();
-                            libc::exit(exit_code);
-                        }
-
-                        libc::close(write_fd);
-
-                        let right_pid = libc::fork();
-
-                        if right_pid < 0 {
-                            eprintln!("Fork failed for right command");
-                            libc::close(read_fd);
-                            libc::waitpid(left_pid, std::ptr::null_mut(), 0);
-                            return 1;
-                        } else if right_pid == 0 {
-                            if libc::dup2(read_fd, 0) < 0 {
-                                eprintln!("dup2 failed for stdin");
-                                libc::exit(1);
-                            }
-                            libc::close(read_fd);
-
-                            let exit_code = right.execute();
-                            libc::exit(exit_code);
-                        }
-
-                        libc::close(read_fd);
+                        close(read_end);
+                        close(write_end);
 
                         let mut status = 0;
-                        let mut exit_code = 0;
+                        waitpid(left_pid, &mut status, 0);
+                        waitpid(right_pid, &mut status, 0);
 
-                        libc::waitpid(left_pid, &mut status, 0);
-
-                        libc::waitpid(right_pid, &mut status, 0);
-                        if libc::WIFEXITED(status) {
-                            exit_code = libc::WEXITSTATUS(status);
-                        }
-
-                        exit_code
+                        WEXITSTATUS(status) as i32
                     }
                 }
                 Operator::And => {
@@ -225,14 +197,14 @@ impl Command {
                     right.execute()
                 }
                 Operator::Background => unsafe {
-                    let pid = libc::fork();
+                    let pid = fork();
 
                     if pid < 0 {
                         eprintln!("Fork failed for background process");
                         1
                     } else if pid == 0 {
                         let exit_code = left.execute();
-                        libc::exit(exit_code);
+                        exit(exit_code);
                     } else {
                         right.execute()
                     }

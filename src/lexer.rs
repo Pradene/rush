@@ -1,19 +1,19 @@
-use crate::command::RedirectType;
+use crate::command::RedirectOperator;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Word(String),
-    SingleQuoted(String),       // 'text'
-    DoubleQuoted(String),       // "text"
-    Semicolon,                  // ;
-    Pipe,                       // |
-    And,                        // &&
-    Or,                         // ||
-    Background,                 // &
-    RedirectType(RedirectType), // >, >>, >&, <, <<, <&
-    LParen,                     // (
-    RParen,                     // )
-    EOF,                        // End of input
+    SingleQuoted(String),               // 'text'
+    DoubleQuoted(String),               // "text"
+    Semicolon,                          // ;
+    Pipe,                               // |
+    And,                                // &&
+    Or,                                 // ||
+    Background,                         // &
+    RedirectOperator(RedirectOperator), // >, >>, >&, <, <<, <&
+    LParen,                             // (
+    RParen,                             // )
+    EOF,                                // End of input
 }
 
 pub struct Lexer {
@@ -110,13 +110,13 @@ impl Lexer {
         match self.peek() {
             Some('<') => {
                 self.consume();
-                Token::RedirectType(RedirectType::HereDoc)
+                Token::RedirectOperator(RedirectOperator::HereDoc)
             }
             Some('&') => {
                 self.consume();
-                Token::RedirectType(RedirectType::DuplicateIn)
+                Token::RedirectOperator(RedirectOperator::DuplicateIn)
             }
-            _ => Token::RedirectType(RedirectType::Input),
+            _ => Token::RedirectOperator(RedirectOperator::Input),
         }
     }
 
@@ -125,13 +125,13 @@ impl Lexer {
         match self.peek() {
             Some('<') => {
                 self.consume();
-                Token::RedirectType(RedirectType::Append)
+                Token::RedirectOperator(RedirectOperator::Append)
             }
             Some('&') => {
                 self.consume();
-                Token::RedirectType(RedirectType::DuplicateOut)
+                Token::RedirectOperator(RedirectOperator::DuplicateOut)
             }
-            _ => Token::RedirectType(RedirectType::Overwrite),
+            _ => Token::RedirectOperator(RedirectOperator::Overwrite),
         }
     }
 

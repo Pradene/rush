@@ -1,4 +1,4 @@
-use crate::command::{Command, Operator, RedirectTarget, RedirectType, Redirection};
+use crate::command::{Command, Operator, RedirectOperator, RedirectTarget, Redirection};
 use crate::lexer::{Lexer, Token};
 
 pub struct Parser {
@@ -68,7 +68,7 @@ impl Parser {
                     words.push(s.clone());
                     self.advance();
                 }
-                Token::RedirectType(_) => {
+                Token::RedirectOperator(_) => {
                     redirects.push(self.parse_redirection()?);
                 }
                 _ => break,
@@ -88,18 +88,18 @@ impl Parser {
 
     fn parse_redirection(&mut self) -> Result<Redirection, String> {
         let rt = match &self.current_token {
-            Token::RedirectType(t) => t.clone(),
+            Token::RedirectOperator(t) => t.clone(),
             _ => return Err("Expected redirect operator".to_string()),
         };
         self.advance();
 
-        let (mut fd, direction) = match rt {
-            RedirectType::Overwrite => (Some(1), RedirectType::Overwrite),
-            RedirectType::Append => (Some(1), RedirectType::Append),
-            RedirectType::DuplicateOut => (Some(1), RedirectType::DuplicateOut),
-            RedirectType::Input => (Some(0), RedirectType::Input),
-            RedirectType::DuplicateIn => (Some(0), RedirectType::DuplicateIn),
-            RedirectType::HereDoc => (Some(0), RedirectType::HereDoc),
+        let (mut fd, operator) = match rt {
+            RedirectOperator::Overwrite => (Some(1), RedirectOperator::Overwrite),
+            RedirectOperator::Append => (Some(1), RedirectOperator::Append),
+            RedirectOperator::DuplicateOut => (Some(1), RedirectOperator::DuplicateOut),
+            RedirectOperator::Input => (Some(0), RedirectOperator::Input),
+            RedirectOperator::DuplicateIn => (Some(0), RedirectOperator::DuplicateIn),
+            RedirectOperator::HereDoc => (Some(0), RedirectOperator::HereDoc),
         };
 
         if let Token::Word(n) = &self.current_token {
@@ -125,7 +125,7 @@ impl Parser {
 
         Ok(Redirection {
             fd,
-            direction,
+            operator,
             target,
         })
     }
