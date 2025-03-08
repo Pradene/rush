@@ -112,12 +112,24 @@ impl Command {
         }
     }
 
-    pub fn execute(&self) -> Result<bool, String> {
+    pub fn execute(&self) -> i32 {
         match self {
             Command::Simple { .. } => {
-                let mut cmd = self.build_std_command()?;
-                let status = cmd.status().map_err(|e| e.to_string())?;
-                Ok(status.success())
+                let mut cmd = match self.build_std_command() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        return 127;
+                    }
+                };
+
+                match cmd.status() {
+                    Ok(status) => status.code().unwrap_or(1),
+                    Err(e) => {
+                        eprintln!("Execution error: {}", e);
+                        return 1;
+                    }
+                }
             }
 
             Command::Binary {
@@ -126,51 +138,93 @@ impl Command {
                 operator,
             } => match operator {
                 Operator::Pipe => {
-                    let mut left_cmd = left
-                        .build_std_command()?
-                        .stdout(Stdio::piped())
-                        .spawn()
-                        .map_err(|e| e.to_string())?;
+                    let mut left_cmd = match left.build_std_command() {
+                        Ok(cmd) => cmd,
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            return 127;
+                        }
+                    };
 
-                    let left_output = left_cmd
-                        .stdout
-                        .take()
-                        .ok_or("Failed to capture left command output")?;
+                    let mut left_child = match left_cmd.stdout(Stdio::piped()).spawn() {
+                        Ok(child) => child,
+                        Err(e) => {
+                            eprintln!("Failed to execute left command: {}", e);
+                            return 1;
+                        }
+                    };
 
-                    let mut right_cmd = right
-                        .build_std_command()?
-                        .stdin(Stdio::from(left_output))
-                        .spawn()
-                        .map_err(|e| e.to_string())?;
+                    let left_output = match left_child.stdout.take() {
+                        Some(output) => output,
+                        None => {
+                            eprintln!("Failed to capture left command output");
+                            return 1;
+                        }
+                    };
 
-                    let left_status = left_cmd.wait().map_err(|e| e.to_string())?;
-                    let right_status = right_cmd.wait().map_err(|e| e.to_string())?;
+                    let mut right_cmd = match right.build_std_command() {
+                        Ok(cmd) => cmd,
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            return 127;
+                        }
+                    };
 
-                    Ok(left_status.success() && right_status.success())
+                    let mut right_child = match right_cmd.stdin(Stdio::from(left_output)).spawn() {
+                        Ok(child) => child,
+                        Err(e) => {
+                            eprintln!("Failed to execute right command: {}", e);
+                            return 1;
+                        }
+                    };
+
+                    let _ = left_child.wait();
+                    let right_status = match right_child.wait() {
+                        Ok(status) => status,
+                        Err(e) => {
+                            eprintln!("Failed to get right command status: {}", e);
+                            return 1;
+                        }
+                    };
+
+                    right_status.code().unwrap_or(1)
                 }
                 Operator::And => {
-                    if left.execute()? {
+                    let left_code = left.execute();
+                    if left_code == 0 {
                         right.execute()
                     } else {
-                        Ok(false)
+                        left_code
                     }
                 }
                 Operator::Or => {
-                    if left.execute()? {
-                        Ok(true)
+                    let left_code = left.execute();
+                    if left_code == 0 {
+                        left_code
                     } else {
                         right.execute()
                     }
                 }
                 Operator::Semicolon => {
-                    let _ = left.execute()?;
+                    let _ = left.execute();
                     right.execute()
                 }
                 Operator::Background => {
-                    left.build_std_command()?
-                        .spawn()
-                        .map_err(|e| e.to_string())?;
-                    right.execute()
+                    let mut left_cmd = match left.build_std_command() {
+                        Ok(cmd) => cmd,
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            return 127;
+                        }
+                    };
+
+                    match left_cmd.spawn() {
+                        Ok(_) => right.execute(),
+                        Err(e) => {
+                            eprintln!("Failed to spawn background process: {}", e);
+                            return 1;
+                        }
+                    }
                 }
             },
         }

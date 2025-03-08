@@ -15,10 +15,9 @@ fn main() {
         // println!("{:#?}", command);
 
         match command {
-            Ok(command) => match command.execute() {
-                Ok(_) => continue,
-                Err(e) => eprintln!("{}", e),
-            },
+            Ok(command) => {
+                let _ = command.execute();
+            }
             Err(e) => eprintln!("Parsing error: {}", e),
         }
     }
