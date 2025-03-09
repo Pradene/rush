@@ -16,6 +16,18 @@ impl Parser {
         }
     }
 
+    fn expect(&mut self, expected: Token) -> Result<(), String> {
+        if self.current_token == expected {
+            self.advance();
+            Ok(())
+        } else {
+            Err(format!(
+                "Expected {:?}, got {:?}",
+                expected, self.current_token
+            ))
+        }
+    }
+
     fn advance(&mut self) {
         self.current_token = self.lexer.next_token();
     }
@@ -25,7 +37,12 @@ impl Parser {
     }
 
     fn parse_with_min_precedence(&mut self, min_precedence: u8) -> Result<Command, String> {
-        let mut left = self.parse_command()?;
+        let mut left;
+        if self.current_token == Token::LParen {
+            left = self.parse_group()?;
+        } else {
+            left = self.parse_command()?;
+        }
 
         loop {
             let (operator, precedence) = match self.current_token {
@@ -52,6 +69,16 @@ impl Parser {
         }
 
         Ok(left)
+    }
+
+    fn parse_group(&mut self) -> Result<Command, String> {
+        self.advance();
+        let inner = self.parse()?;
+        self.expect(Token::RParen)?;
+
+        Ok(Command::Group {
+            group: Box::new(inner),
+        })
     }
 
     fn parse_command(&mut self) -> Result<Command, String> {

@@ -55,6 +55,10 @@ pub enum Command {
         right: Box<Command>,
         operator: Operator,
     },
+
+    Group {
+        group: Box<Command>,
+    },
 }
 
 impl Command {
@@ -235,6 +239,8 @@ impl Command {
                     }
                 },
             },
+
+            Command::Group { group } => group.execute(),
         }
     }
 }

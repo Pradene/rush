@@ -58,6 +58,8 @@ fn main() {
         let lexer = Lexer::new(input);
         let command = Parser::new(lexer).parse();
 
+        println!("{:#?}", command);
+
         match command {
             Ok(command) => {
                 let _ = command.execute();
