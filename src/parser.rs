@@ -16,6 +16,10 @@ impl Parser {
         }
     }
 
+    pub fn parse(&mut self) -> Result<Command, String> {
+        self.parse_with_min_precedence(0)
+    }
+
     fn expect(&mut self, expected: Token) -> Result<(), String> {
         if self.current_token == expected {
             self.advance();
@@ -30,10 +34,6 @@ impl Parser {
 
     fn advance(&mut self) {
         self.current_token = self.lexer.next_token();
-    }
-
-    pub fn parse(&mut self) -> Result<Command, String> {
-        self.parse_with_min_precedence(0)
     }
 
     fn parse_with_min_precedence(&mut self, min_precedence: u8) -> Result<Command, String> {

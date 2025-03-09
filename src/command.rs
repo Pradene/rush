@@ -1,11 +1,13 @@
 use std::ffi::CString;
 
+use libc::{
+    access, close, dup, dup2, execve, exit, fork, getpgrp, getpid, ioctl, open, pipe, setpgid,
+    signal, tcsetpgrp, waitpid,
+};
 use libc::{c_char, c_int};
 use libc::{
-    close, dup, dup2, execvp, exit, fork, getpgrp, getpid, ioctl, open, pipe, setpgid, signal,
-    tcsetpgrp, waitpid,
+    O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, SIGINT, SIGQUIT, SIG_DFL, TIOCSPGRP, X_OK,
 };
-use libc::{O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, SIGINT, SIGQUIT, SIG_DFL, TIOCSPGRP};
 use libc::{WEXITSTATUS, WIFEXITED};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,9 +103,7 @@ impl Command {
     pub fn execute(&self) -> i32 {
         match self {
             Command::Simple {
-                executable,
-                args,
-                redirects,
+                args, redirects, ..
             } => {
                 if self.is_builtin() {
                     let mut saved_fds = std::collections::HashMap::new();
@@ -153,7 +153,9 @@ impl Command {
 
                     exit_code
                 } else {
-                    let c_exec = CString::new(executable.as_str()).unwrap();
+                    let path = self.path();
+
+                    let c_exec = CString::new(path.as_str()).unwrap();
                     let mut c_args: Vec<CString> = args
                         .iter()
                         .map(|a| CString::new(a.as_str()).unwrap())
@@ -163,6 +165,13 @@ impl Command {
                     let mut ptr_args: Vec<*const c_char> =
                         c_args.iter().map(|s| s.as_ptr()).collect();
                     ptr_args.push(std::ptr::null());
+
+                    let c_env: Vec<CString> = std::env::vars()
+                        .map(|(key, val)| CString::new(format!("{}={}", key, val)).unwrap())
+                        .collect();
+                    let mut env_ptrs: Vec<*const c_char> =
+                        c_env.iter().map(|env| env.as_ptr()).collect();
+                    env_ptrs.push(std::ptr::null());
 
                     unsafe {
                         let pid = fork();
@@ -179,7 +188,7 @@ impl Command {
                                 exit(1);
                             }
 
-                            execvp(c_exec.as_ptr(), ptr_args.as_ptr());
+                            execve(c_exec.as_ptr(), ptr_args.as_ptr(), env_ptrs.as_ptr());
                             eprintln!("Execution failed");
                             exit(1);
                         } else if pid < 0 {
@@ -335,6 +344,28 @@ impl Command {
             },
 
             _ => panic!(),
+        }
+    }
+
+    fn path(&self) -> String {
+        match self {
+            Command::Simple { executable, .. } => {
+                let path = std::env::var("PATH").unwrap_or("".to_string());
+                let paths: Vec<&str> = path.split(':').collect();
+
+                for path in paths {
+                    let executable_path = path.to_owned() + "/" + executable.as_str();
+
+                    let can_execute = unsafe { access(executable_path.as_ptr() as *const _, X_OK) };
+                    if can_execute == 0 {
+                        return executable_path;
+                    }
+                }
+
+                executable.clone()
+            }
+
+            _ => "".to_string(),
         }
     }
 }
