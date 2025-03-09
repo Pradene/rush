@@ -1,8 +1,8 @@
 use std::ffi::CString;
 
 use libc::{
-    __errno_location, close, dup2, execvp, exit, fork, getpgrp, getpid, ioctl, open, pipe, setpgid,
-    signal, tcsetpgrp, waitpid,
+    __errno_location, close, dup, dup2, execvp, exit, fork, getpgrp, getpid, ioctl, open, pipe,
+    setpgid, signal, tcsetpgrp, waitpid,
 };
 use libc::{c_char, c_int};
 use libc::{
@@ -101,60 +101,112 @@ impl Command {
     pub fn execute(&self) -> i32 {
         match self {
             Command::Simple {
-                executable, args, ..
+                executable,
+                args,
+                redirects,
             } => {
-                let c_exec = CString::new(executable.as_str()).unwrap();
-                let mut c_args: Vec<CString> = args
-                    .iter()
-                    .map(|a| CString::new(a.as_str()).unwrap())
-                    .collect();
-                c_args.insert(0, c_exec.clone());
+                if self.is_builtin() {
+                    let mut saved_fds = std::collections::HashMap::new();
 
-                let mut ptr_args: Vec<*const c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
-                ptr_args.push(std::ptr::null());
+                    for redirection in redirects {
+                        let fd = redirection
+                            .fd
+                            .unwrap_or_else(|| match redirection.operator {
+                                RedirectOperator::Input
+                                | RedirectOperator::HereDoc
+                                | RedirectOperator::DuplicateIn => 0,
+                                _ => 1,
+                            });
 
-                unsafe {
-                    let pid = fork();
-                    if pid == 0 {
-                        signal(SIGINT, SIG_DFL);
-                        signal(SIGQUIT, SIG_DFL);
-
-                        setpgid(0, 0);
-
-                        tcsetpgrp(0, getpid());
-
-                        if let Err(e) = self.redirect() {
-                            eprintln!("Redirection error: {}", e);
-                            exit(1);
+                        if !saved_fds.contains_key(&fd) {
+                            let saved_fd = unsafe { dup(fd as c_int) };
+                            if saved_fd == -1 {
+                                eprintln!("Failed to save file descriptor {}", fd);
+                                for (_, saved_fd) in saved_fds {
+                                    unsafe { close(saved_fd) };
+                                }
+                                return 1;
+                            }
+                            saved_fds.insert(fd, saved_fd);
                         }
+                    }
 
-                        execvp(c_exec.as_ptr(), ptr_args.as_ptr());
-                        eprintln!("Execution failed");
-                        exit(1);
-                    } else if pid < 0 {
-                        eprintln!("Fork failed");
+                    if let Err(e) = self.redirect() {
+                        eprintln!("Redirection error: {}", e);
+                        for (fd, saved_fd) in saved_fds {
+                            unsafe {
+                                dup2(saved_fd, fd as c_int);
+                                close(saved_fd);
+                            }
+                        }
                         return 1;
                     }
 
-                    let shell_pgrp = getpgrp();
+                    let exit_code = self.execute_builtin();
 
-                    setpgid(pid, pid);
-                    tcsetpgrp(0, pid);
-
-                    let mut status = 0;
-                    while waitpid(pid, &mut status, 0) < 0 {
-                        if *__errno_location() != EINTR {
-                            break;
+                    for (fd, saved_fd) in saved_fds {
+                        unsafe {
+                            dup2(saved_fd, fd as c_int);
+                            close(saved_fd);
                         }
                     }
 
-                    let _ = tcsetpgrp(0, shell_pgrp);
-                    ioctl(0, TIOCSPGRP, &shell_pgrp);
+                    exit_code
+                } else {
+                    let c_exec = CString::new(executable.as_str()).unwrap();
+                    let mut c_args: Vec<CString> = args
+                        .iter()
+                        .map(|a| CString::new(a.as_str()).unwrap())
+                        .collect();
+                    c_args.insert(0, c_exec.clone());
 
-                    if WIFEXITED(status) {
-                        WEXITSTATUS(status) as i32
-                    } else {
-                        1
+                    let mut ptr_args: Vec<*const c_char> =
+                        c_args.iter().map(|s| s.as_ptr()).collect();
+                    ptr_args.push(std::ptr::null());
+
+                    unsafe {
+                        let pid = fork();
+                        if pid == 0 {
+                            signal(SIGINT, SIG_DFL);
+                            signal(SIGQUIT, SIG_DFL);
+
+                            setpgid(0, 0);
+
+                            tcsetpgrp(0, getpid());
+
+                            if let Err(e) = self.redirect() {
+                                eprintln!("Redirection error: {}", e);
+                                exit(1);
+                            }
+
+                            execvp(c_exec.as_ptr(), ptr_args.as_ptr());
+                            eprintln!("Execution failed");
+                            exit(1);
+                        } else if pid < 0 {
+                            eprintln!("Fork failed");
+                            return 1;
+                        }
+
+                        let shell_pgrp = getpgrp();
+
+                        setpgid(pid, pid);
+                        tcsetpgrp(0, pid);
+
+                        let mut status = 0;
+                        while waitpid(pid, &mut status, 0) < 0 {
+                            if *__errno_location() != EINTR {
+                                break;
+                            }
+                        }
+
+                        let _ = tcsetpgrp(0, shell_pgrp);
+                        ioctl(0, TIOCSPGRP, &shell_pgrp);
+
+                        if WIFEXITED(status) {
+                            WEXITSTATUS(status) as i32
+                        } else {
+                            1
+                        }
                     }
                 }
             }
@@ -241,6 +293,52 @@ impl Command {
             },
 
             Command::Group { group } => group.execute(),
+        }
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        match self {
+            Command::Simple { executable, .. } => {
+                matches!(executable.as_str(), "cd" | "echo" | "exit" | "type")
+            }
+            _ => false,
+        }
+    }
+
+    fn execute_builtin(&self) -> i32 {
+        match self {
+            Command::Simple {
+                executable, args, ..
+            } => match executable.as_str() {
+                "cd" => {
+                    let path = args.get(0).map(|s| s.as_str()).unwrap_or("~");
+                    match std::env::set_current_dir(path) {
+                        Ok(_) => 0,
+                        Err(e) => {
+                            eprintln!("cd: {}", e);
+                            1
+                        }
+                    }
+                }
+
+                "echo" => {
+                    println!("{}", args.join(" "));
+                    0
+                }
+
+                "exit" => {
+                    unsafe { exit(0) };
+                }
+
+                "type" => {
+                    eprint!("Not implemented");
+                    0
+                }
+
+                _ => panic!(),
+            },
+
+            _ => panic!(),
         }
     }
 }
