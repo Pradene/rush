@@ -1,13 +1,11 @@
 use std::ffi::CString;
 
-use libc::{
-    __errno_location, close, dup, dup2, execvp, exit, fork, getpgrp, getpid, ioctl, open, pipe,
-    setpgid, signal, tcsetpgrp, waitpid,
-};
 use libc::{c_char, c_int};
 use libc::{
-    EINTR, O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, SIGINT, SIGQUIT, SIG_DFL, TIOCSPGRP,
+    close, dup, dup2, execvp, exit, fork, getpgrp, getpid, ioctl, open, pipe, setpgid, signal,
+    tcsetpgrp, waitpid,
 };
+use libc::{O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, SIGINT, SIGQUIT, SIG_DFL, TIOCSPGRP};
 use libc::{WEXITSTATUS, WIFEXITED};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,7 +64,9 @@ impl Command {
         if let Command::Simple { redirects, .. } = self {
             for redirection in redirects {
                 let fd = redirection.fd.unwrap_or(match redirection.operator {
-                    RedirectOperator::Input | RedirectOperator::DuplicateIn => 0,
+                    RedirectOperator::Input
+                    | RedirectOperator::DuplicateIn
+                    | RedirectOperator::HereDoc => 0,
                     _ => 1,
                 });
 
@@ -193,11 +193,7 @@ impl Command {
                         tcsetpgrp(0, pid);
 
                         let mut status = 0;
-                        while waitpid(pid, &mut status, 0) < 0 {
-                            if *__errno_location() != EINTR {
-                                break;
-                            }
-                        }
+                        waitpid(pid, &mut status, 0);
 
                         let _ = tcsetpgrp(0, shell_pgrp);
                         ioctl(0, TIOCSPGRP, &shell_pgrp);
